@@ -104,7 +104,6 @@ for epoch in range(num_epochs):
         if isinstance(labels, tuple):
             labels = torch.tensor(labels)
         labels = labels.view(-1)
-        
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
