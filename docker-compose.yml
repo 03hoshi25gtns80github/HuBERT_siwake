@@ -1,13 +1,11 @@
 version: '3.8'
 
 services:
-  HuBERT:
+  hubert:
     build: .
     volumes:
       - .:/app
-    tty: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
+
+    working_dir: /app
+    command: ["tail", "-f", "/dev/null"]
+

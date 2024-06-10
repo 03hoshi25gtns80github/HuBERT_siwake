@@ -1,0 +1,9 @@
+torch
+transformers
+soundfile
+librosa
+#pyclustering
+pandas
+matplotlib
+moviepy
+scikit-learn
