@@ -1,0 +1,12 @@
+/wav
+/test
+/test2
+/data
+/dataset
+/model
+/output
+/result
+/result2
+**/*.pkl
+**/*.csv
+**/*.pth

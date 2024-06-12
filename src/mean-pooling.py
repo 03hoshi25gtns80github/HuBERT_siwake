@@ -20,7 +20,7 @@ model = AutoModel.from_pretrained(model_name)
 model.eval()
 
 # ディレクトリ内のすべてのwavファイルを取得
-data_dir = "../wav"
+data_dir = "../data"
 wav_files = [f for f in os.listdir(data_dir) if f.endswith('.wav')]
 
 # 特徴量リスト
@@ -51,6 +51,9 @@ for wav_file in wav_files:
         sampling_rate=16000,
     )
     
+    # 入力データの形状を確認
+    print(f"Input tensor shape for {wav_file}: {inputs['input_values'].shape}")
+    
     # 入力データの形状を変換
     inputs['input_values'] = inputs['input_values'].transpose(0, 1)
     outputs = model(**inputs)
@@ -70,7 +73,7 @@ for wav_file in wav_files:
 
 # X-meansクラスタリング
 # ハイパーパラメータの設定
-min_clusters = 2
+min_clusters = 3
 max_clusters = 8
 
 # 初期クラスタの設定
