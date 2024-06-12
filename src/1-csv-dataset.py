@@ -1,3 +1,7 @@
+"""
+metadata.csvの通りにデータセットを作成する
+"""
+
 import os
 import pandas as pd
 import soundfile as sf

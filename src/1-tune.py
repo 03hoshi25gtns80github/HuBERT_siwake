@@ -1,3 +1,9 @@
+"""
+jpynbで実行する
+教師ありでファインチューニング
+state_dictを保存する
+"""
+
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset

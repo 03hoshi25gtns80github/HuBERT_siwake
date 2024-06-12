@@ -1,3 +1,8 @@
+"""
+    ディレクトリ内のすべてのwavファイルを取得してcsvファイルに変換する
+    wavファイルの名前とlabelを対応させたcsvファイルを作成する
+"""
+
 import os
 import pandas as pd
 import re
