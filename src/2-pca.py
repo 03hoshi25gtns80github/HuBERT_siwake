@@ -1,105 +1,130 @@
-import sys
-import os
+"""
+jpynbで実行する
+教師ありでファインチューニング
+state_dictを保存する
+"""
 
-# pyclusteringディレクトリをパスに追加
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'pyclustering'))
-
-# その後、通常通りにインポート
-from pyclustering.cluster.xmeans import xmeans, kmeans_plusplus_initializer
-
+import torch
+from torch import nn, optim
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoFeatureExtractor, HubertModel
+import pickle
 import soundfile as sf
 import librosa
-from transformers import AutoFeatureExtractor, AutoModel
-import torch
-import pandas as pd
 from sklearn.decomposition import PCA
-import numpy as np
+
+# データセットのロード
+with open('train_dataset.pkl', 'rb') as f:
+    train_dataset = pickle.load(f)
+
+# ラベルを動的に取得してマッピングする辞書を作成
+unique_labels = set(item['label'] for item in train_dataset)
+label_to_int = {label: idx for idx, label in enumerate(unique_labels)}
+
+# カスタムデータセットクラスの定義
+class AudioDataset(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained("rinna/japanese-hubert-base")
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        audio_path = self.dataset[idx]['audio']
+        label = self.dataset[idx]['label']
+        raw_speech, sr = sf.read(audio_path)
+        if sr != 16000:
+            raw_speech = librosa.resample(raw_speech, orig_sr=sr, target_sr=16000)
+        inputs = self.feature_extractor(raw_speech, return_tensors="pt", sampling_rate=16000)
+        inputs['input_values'] = inputs['input_values'].transpose(0, 1)
+        return inputs['input_values'], label_to_int[label]  # ラベルを整数に変換して返す
+
+# データローダーの設定
+train_loader = DataLoader(AudioDataset(train_dataset), batch_size=1, shuffle=True)
 
 # モデルとプロセッサのロード
 model_name = "rinna/japanese-hubert-base"
-feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
-model = AutoModel.from_pretrained(model_name)
-model.eval()
+hubert_model = HubertModel.from_pretrained(model_name)
 
-# ディレクトリ内のすべてのwavファイルを取得
-data_dir = "../wav"
-wav_files = [f for f in os.listdir(data_dir) if f.endswith('.wav')]
+class ClassificationModel(nn.Module):
+    def __init__(self, hubert_model, num_labels, pca_components=100):
+        super(ClassificationModel, self).__init__()
+        self.hubert = hubert_model
+        self.pca = PCA(n_components=pca_components)
+        self.fc1 = nn.Linear(pca_components * 768, 1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.fc3 = nn.Linear(512, 256)
+        self.fc4 = nn.Linear(256, num_labels)
+        self.softmax = nn.Softmax(dim=1)
 
-# 特徴量リスト
-features_list = []
+    def forward(self, input_values):
+        print(f"Input shape before squeeze: {input_values.shape}")
+        if input_values.dim() == 4:
+            input_values = input_values.squeeze(1)
+        print(f"Input shape after squeeze: {input_values.shape}")
+        
+        outputs = self.hubert(input_values)
+        hidden_states = outputs.last_hidden_state
+        print(f"Hidden states shape: {hidden_states.shape}")
+        
+        # PCAを適用
+        batch_size, seq_len, feature_dim = hidden_states.shape
+        hidden_states_reshaped = hidden_states.view(batch_size * seq_len, feature_dim)
+        pca_features = self.pca.fit_transform(hidden_states_reshaped)
+        pca_features = pca_features.reshape(batch_size, -1)
+        print(f"Shape after PCA: {pca_features.shape}")
+        
+        x = self.fc1(pca_features)
+        print(f"Shape after FC1 layer: {x.shape}")
+        
+        x = torch.relu(x)  # 活性化関数としてReLUを使用
+        x = self.fc2(x)
+        print(f"Shape after FC2 layer: {x.shape}")
+        
+        x = torch.relu(x)  # 活性化関数としてReLUを使用
+        x = self.fc3(x)
+        print(f"Shape after FC3 layer: {x.shape}")
+        
+        x = torch.relu(x)  # 活性化関数としてReLUを使用
+        logits = self.fc4(x)
+        print(f"Shape after FC4 layer: {logits.shape}")
+        
+        probs = self.softmax(logits)
+        print(f"Output shape: {probs.shape}")
+        
+        return probs
 
-# ファイルネームリスト
-filenames = []
+num_labels = len(unique_labels)  # クラス数を動的に設定
+model = ClassificationModel(hubert_model, num_labels, pca_components=150)
 
-for wav_file in wav_files:
-    audio_file = os.path.join(data_dir, wav_file)
-    
-    # wavファイルの読み込み
-    raw_speech, sr = sf.read(audio_file)
-    
-    # サンプリングレートの変換
-    if sr != 16000:
-        raw_speech_16kHz = librosa.resample(raw_speech, orig_sr=sr, target_sr=16000)
-    else:
-        raw_speech_16kHz = raw_speech
-    
-    # 入力データの長さを確認
-    print(f"Input data length for {wav_file}: {len(raw_speech_16kHz)}")
-    
-    # 特徴量の抽出
-    inputs = feature_extractor(
-        raw_speech_16kHz,
-        return_tensors="pt",
-        sampling_rate=16000,
-    )
-    
-    # 入力データの形状を変換
-    inputs['input_values'] = inputs['input_values'].transpose(0, 1)
-    outputs = model(**inputs)
-    
-    # 埋め込み表現の取得
-    embeddings = outputs.last_hidden_state
-    print(f"Output shape for {wav_file}: {embeddings.size()}")  # [1, #frames, 768]
-    
-    # 特徴量リストに追加
-    features_list.append(embeddings.squeeze().detach().numpy())
-    
-    # ファイルネームリストに追加
-    filenames.extend([os.path.basename(wav_file)])
+# 損失関数と最適化手法の設定
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
-# 特徴量リストを2次元配列に変換
-features_array = np.vstack(features_list)
+# ファインチューニングの実行
+num_epochs = 1
+model.train()
+for epoch in range(num_epochs):
+    for inputs, labels in train_loader:
+        # デバッグ用のprint文を追加
+        print(f"Batch input shape before squeeze: {inputs.shape}")
+        inputs = inputs.squeeze(1)  # 形状を (batch_size, sequence_length) に整形
+        print(f"Batch input shape after squeeze: {inputs.shape}")
+        
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        
+         # labelsをテンソルに変換し、形状を (batch_size,) に整形
+        if isinstance(labels, tuple):
+            labels = torch.tensor(labels)
+        labels = labels.view(-1)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
 
-# PCAの実行
-pca = PCA(n_components=1024)  # 2次元に削減
-pca_features = pca.fit_transform(features_array)
+    print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {loss.item()}")
 
-# X-meansクラスタリング
-# ハイパーパラメータの設定
-min_clusters = 3
-max_clusters = 4
-
-# 初期クラスタの設定
-initial_centers = kmeans_plusplus_initializer(pca_features, min_clusters).initialize()
-xmeans_instance = xmeans(pca_features, initial_centers, max_clusters)
-xmeans_instance.process()
-clusters = xmeans_instance.get_clusters()
-labels = [0] * len(pca_features)
-
-for cluster_id, cluster in enumerate(clusters):
-    for index in cluster:
-        labels[index] = cluster_id
-
-# クラスタリング結果をメタデータに追加
-df = pd.DataFrame({'filename': filenames, 'cluster': labels})
-
-# データフレームをクラスタ順に並び替え
-df = df.sort_values(by='cluster')
-
-# メタデータを表示
-print("Metadata DataFrame with Clustering Results:")
-print(df)
-
-# メタデータをCSVファイルとして保存
-df.to_csv('metadata_with_clusters.csv', index=False)
-print("Metadata with clustering results saved to metadata_with_clusters.csv")
+# ファインチューニング後のモデルを保存
+torch.save(model.state_dict(), "finetuned_hubert_model.pth")
+print("ファインチューニングが完了しました。")
